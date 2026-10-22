@@ -15,10 +15,6 @@ permissions:
 jobs:
   sonarqube:
     name: SonarQube Scan and Quality Gate
-    if: >-
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.base.ref == 'main'
-
     runs-on: [self-hosted, runner-2]
 
     steps:
