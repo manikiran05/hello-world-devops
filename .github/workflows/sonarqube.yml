@@ -1,9 +1,12 @@
-name: Reusable SonarQube
+
+name: Reusable SonarQube PR Scan
 
 on:
   workflow_call:
     secrets:
       SONAR_TOKEN:
+        required: true
+      SONAR_HOST_URL:
         required: true
 
 permissions:
@@ -11,62 +14,46 @@ permissions:
 
 jobs:
   sonarqube:
-    name: SonarQube Scan
+    name: SonarQube Scan and Quality Gate
     runs-on: [self-hosted, runner-2]
 
-    env:
-      JAVA_HOME: C:\Users\manikiran\tools\jdk-21\jdk-21.0.12.1+1
-      SONAR_HOST_URL: http://localhost:9000
-
-    defaults:
-      run:
-        shell: cmd
-
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Add Java 21 to PATH
-        run: echo C:\Users\manikiran\tools\jdk-21\jdk-21.0.12.1+1\bin>>%GITHUB_PATH%
+        with:
+          fetch-depth: 0
 
       - name: Check Java
+        shell: bash
         run: |
-          echo JAVA_HOME=%JAVA_HOME%
           java -version
 
       - name: Check Node.js
-        run: node --version
+        shell: bash
+        run: |
+          node --version
+          npm --version
 
-      - name: Install Dependencies
-        run: npm ci
-
-      - name: SonarQube Scan
+      - name: SonarQube scan
+        uses: SonarSource/sonarqube-scan-action@v5.3.1
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: |
-          npx sonar-scanner ^
-            -Dsonar.host.url=%SONAR_HOST_URL% ^
-            -Dsonar.login=%SONAR_TOKEN%
-
-      - name: Generate SonarQube Report
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: |
-          curl -s -u %SONAR_TOKEN%: "%SONAR_HOST_URL%/api/issues/search?componentKeys=hello-world-devops&resolved=false&ps=500" > sonarqube-results.json
-
-      - name: Check SonarQube Report
-        run: |
-          if exist sonarqube-results.json (
-            echo SonarQube report created successfully
-          ) else (
-            echo SonarQube report was not created
-            exit /b 1
-          )
-
-      - name: Upload SonarQube Report
-        if: always() && hashFiles('sonarqube-results.json') != ''
-        uses: actions/upload-artifact@v4
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
         with:
-          name: sonarqube-results
-          path: sonarqube-results.json
-          if-no-files-found: ignore
+          args: >
+            -Dsonar.exclusions=**/node_modules/**,**/.next/**,**/coverage/**,**/dist/**,**/build/**
+
+      - name: Wait for SonarQube Quality Gate
+        uses: SonarSource/sonarqube-quality-gate-action@v1.2.0
+        timeout-minutes: 10
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      - name: SonarQube result
+        if: success()
+        shell: bash
+        run: |
+          echo "SonarQube analysis completed."
+          echo "Quality Gate passed."
+          echo "Review the analysis in your SonarQube server."
