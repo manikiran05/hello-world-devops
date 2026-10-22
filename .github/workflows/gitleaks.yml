@@ -48,4 +48,3 @@ jobs:
           name: gitleaks-results
           path: gitleaks-results.json
           if-no-files-found: ignore
-``` id="gitleaks-linux"
