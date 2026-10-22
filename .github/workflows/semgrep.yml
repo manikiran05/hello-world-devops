@@ -14,36 +14,39 @@ jobs:
 
     defaults:
       run:
-        shell: cmd
+        shell: bash
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Add Python Scripts to PATH
-        run: echo C:\Users\manikiran\AppData\Local\Programs\Python\Python313\Scripts>>%GITHUB_PATH%
-
       - name: Check Python
-        run: python --version
+        run: python3 --version
 
       - name: Check Semgrep
-        run: semgrep --version
+        run: |
+          "$HOME/ci-security-lab/tools/python-env/bin/semgrep" --version
 
       - name: Run Semgrep
         env:
           PYTHONIOENCODING: utf-8
           PYTHONUTF8: "1"
+          SEMGREP_CACHE_DIR: ${{ github.workspace }}/../../cache/semgrep
         run: |
-          semgrep scan --config auto --sarif --output semgrep-results.sarif . || exit /b 0
+          mkdir -p "$GITHUB_WORKSPACE/semgrep-cache"
+          "$HOME/ci-security-lab/tools/python-env/bin/semgrep" \
+            scan --config auto --sarif \
+            --output semgrep-results.sarif . || true
 
       - name: Check Semgrep Report
+        if: always()
         run: |
-          if exist semgrep-results.sarif (
-            echo Semgrep report created successfully
-          ) else (
-            echo Semgrep report was not created
-            exit /b 1
-          )
+          if [ -f semgrep-results.sarif ]; then
+            echo "Semgrep report created successfully"
+          else
+            echo "Semgrep report was not created"
+            exit 1
+          fi
 
       - name: Upload Semgrep Results
         if: always() && hashFiles('semgrep-results.sarif') != ''
