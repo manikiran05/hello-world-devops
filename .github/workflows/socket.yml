@@ -1,70 +1,159 @@
+
 name: Socket.dev Security Scan
 
 on:
-  workflow_call:
-    secrets:
-      SOCKET_TOKEN:
-        required: true
-      SOCKET_ORG:
-        required: true
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
 
 permissions:
   contents: read
 
 jobs:
-  socket:
-    name: Socket.dev Scan
+  socket-scan:
+    name: Local Security Scan and Python Summary
     runs-on: [self-hosted, runner-2]
 
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check Socket CLI
+      - name: Check Trivy installation
         shell: bash
         run: |
-          SOCKET="$HOME/ci-security-lab/tools/node_modules/.bin/socket"
+          TRIVY="$HOME/ci-security-lab/tools/trivy"
 
-          if [ ! -x "$SOCKET" ]; then
-            echo "Socket CLI not found: $SOCKET"
+          if [ ! -x "$TRIVY" ]; then
+            echo "::error::Trivy not found at $TRIVY"
             exit 1
           fi
 
-          "$SOCKET" --version
+          "$TRIVY" --version
 
-      - name: Run Socket Scan
+      - name: Scan repository with Trivy
         shell: bash
-        env:
-          SOCKET_CLI_API_TOKEN: ${{ secrets.SOCKET_TOKEN }}
-          SOCKET_ORG: ${{ secrets.SOCKET_ORG }}
         run: |
-          SOCKET="$HOME/ci-security-lab/tools/node_modules/.bin/socket"
+          TRIVY="$HOME/ci-security-lab/tools/trivy"
 
-          set +e
-          "$SOCKET" scan create . \
-            --org "$SOCKET_ORG" \
-            > socket-scan-output.txt 2>&1
-          scan_status=$?
-          set -e
+          "$TRIVY" fs \
+            --scanners vuln,misconfig,secret \
+            --format json \
+            --output trivy-results.json \
+            --exit-code 0 \
+            .
 
-          cat socket-scan-output.txt
-          exit "$scan_status"
+          test -s trivy-results.json
 
-      - name: Check Socket Report
+      - name: Generate Python summary
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from collections import Counter
+          from pathlib import Path
+
+          report = Path("trivy-results.json")
+          output = Path("security-summary.md")
+
+          with report.open(encoding="utf-8") as file:
+              data = json.load(file)
+
+          counts = Counter()
+          findings = []
+
+          for result in data.get("Results") or []:
+              target = result.get("Target", "Unknown")
+              for item in result.get("Vulnerabilities") or []:
+                  severity = (item.get("Severity") or "UNKNOWN").upper()
+                  counts[severity] += 1
+                  findings.append({
+                      "type": "Vulnerability",
+                      "severity": severity,
+                      "id": item.get("VulnerabilityID", "Unknown"),
+                      "target": target,
+                      "title": item.get("Title", ""),
+                  })
+
+              for item in result.get("Misconfigurations") or []:
+                  severity = (item.get("Severity") or "UNKNOWN").upper()
+                  counts[severity] += 1
+                  findings.append({
+                      "type": "Misconfiguration",
+                      "severity": severity,
+                      "id": item.get("ID", "Unknown"),
+                      "target": target,
+                      "title": item.get("Title", ""),
+                  })
+
+              for item in result.get("Secrets") or []:
+                  severity = (item.get("Severity") or "UNKNOWN").upper()
+                  counts[severity] += 1
+                  findings.append({
+                      "type": "Secret",
+                      "severity": severity,
+                      "id": item.get("RuleID", "Unknown"),
+                      "target": target,
+                      "title": item.get("Title", ""),
+                  })
+
+          lines = [
+              "# Local Security Scan Summary",
+              "",
+              f"- **Repository:** {os.environ.get('GITHUB_REPOSITORY', 'Local run')}",
+              f"- **Commit:** {os.environ.get('GITHUB_SHA', 'N/A')}",
+              f"- **Total findings:** {len(findings)}",
+              "",
+              "## Findings by severity",
+              "",
+              "| Severity | Count |",
+              "|---|---:|",
+          ]
+
+          for severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"):
+              lines.append(f"| {severity} | {counts[severity]} |")
+
+          lines.extend(["", "## Finding details", ""])
+
+          if findings:
+              lines.extend([
+                  "| Type | Severity | ID | Target | Title |",
+                  "|---|---|---|---|---|",
+              ])
+              for item in findings:
+                  def safe(value):
+                      return str(value).replace("|", "\\|").replace("\n", " ")
+
+                  lines.append(
+                      f"| {safe(item['type'])} "
+                      f"| {safe(item['severity'])} "
+                      f"| {safe(item['id'])} "
+                      f"| {safe(item['target'])} "
+                      f"| {safe(item['title'])} |"
+                  )
+          else:
+              lines.append("No vulnerabilities, misconfigurations, or secrets were reported by Trivy.")
+
+          output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print(output.read_text(encoding="utf-8"))
+          PY
+
+      - name: Add summary to GitHub Actions
         if: always()
         shell: bash
         run: |
-          if [ -s socket-scan-output.txt ]; then
-            echo "Socket scan output created."
-          else
-            echo "Socket scan output is missing or empty."
-            exit 1
+          if [ -f security-summary.md ]; then
+            cat security-summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Upload Socket Report
+      - name: Upload security reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: socket-results
-          path: socket-scan-output.txt
-          if-no-files-found: ignore
+          name: local-security-scan-results
+          path: |
+            trivy-results.json
+            security-summary.md
+          if-no-files-found: warn
