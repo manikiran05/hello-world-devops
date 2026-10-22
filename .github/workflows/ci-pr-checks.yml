@@ -217,16 +217,17 @@ jobs:
           SOCKET_RESULT: ${{ needs.socket.result }}
 
         run: |
-          echo # CI Pipeline Report>>%GITHUB_STEP_SUMMARY%
-          echo.>>%GITHUB_STEP_SUMMARY%
-        
-          echo ^| Check ^| Status ^|>>%GITHUB_STEP_SUMMARY%
-          echo ^|---^|---^|>>%GITHUB_STEP_SUMMARY%
-          echo ^| Test ^& Quality ^| %TEST_RESULT% ^|>>%GITHUB_STEP_SUMMARY%
-          echo ^| SonarQube ^| %SONAR_RESULT% ^|>>%GITHUB_STEP_SUMMARY%
-          echo ^| CodeQL ^| %CODEQL_RESULT% ^|>>%GITHUB_STEP_SUMMARY%
-          echo ^| Trivy ^| %TRIVY_RESULT% ^|>>%GITHUB_STEP_SUMMARY%
-          echo ^| Snyk ^| %SNYK_RESULT% ^|>>%GITHUB_STEP_SUMMARY%
-          echo ^| Semgrep ^| %SEMGREP_RESULT% ^|>>%GITHUB_STEP_SUMMARY%
-          echo ^| Gitleaks ^| %GITLEAKS_RESULT% ^|>>%GITHUB_STEP_SUMMARY%
-          echo ^| Socket.dev ^| %SOCKET_RESULT% ^|>>%GITHUB_STEP_SUMMARY%
+          {
+            echo "# CI Pipeline Report"
+            echo
+            echo "| Check | Status |"
+            echo "|---|---|"
+            echo "| Test & Quality | $TEST_RESULT |"
+            echo "| SonarQube | $SONAR_RESULT |"
+            echo "| CodeQL | $CODEQL_RESULT |"
+            echo "| Trivy | $TRIVY_RESULT |"
+            echo "| Snyk | $SNYK_RESULT |"
+            echo "| Semgrep | $SEMGREP_RESULT |"
+            echo "| Gitleaks | $GITLEAKS_RESULT |"
+            echo "| Socket.dev / Local Scan | $SOCKET_RESULT |"
+          } >> "$GITHUB_STEP_SUMMARY"
