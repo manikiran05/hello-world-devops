@@ -14,51 +14,71 @@ jobs:
     name: Snyk Security Scan
     runs-on: [self-hosted, runner-5]
 
-    defaults:
-      run:
-        shell: cmd
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Add Snyk to PATH
-        run: echo C:\Users\manikiran\AppData\Roaming\npm>>%GITHUB_PATH%
-
       - name: Check Node.js
+        shell: bash
         run: node --version
 
       - name: Check npm
+        shell: bash
         run: npm --version
 
       - name: Check Snyk
-        run: snyk --version
+        shell: bash
+        run: |
+          if command -v snyk >/dev/null 2>&1; then
+            snyk --version
+          elif [ -x "$HOME/.npm-global/bin/snyk" ]; then
+            "$HOME/.npm-global/bin/snyk" --version
+          else
+            echo "Snyk CLI not found. Install it for the runner user."
+            exit 1
+          fi
 
       - name: Install Dependencies
+        shell: bash
         run: npm ci
 
       - name: Snyk Test
+        shell: bash
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        run: snyk test --json > snyk-results.json || exit /b 0
+        run: |
+          set +e
+          snyk test --json > snyk-results.json
+          snyk_status=$?
+          set -e
+
+          if [ "$snyk_status" -gt 1 ]; then
+            echo "Snyk encountered an error. Check the report and logs."
+            exit "$snyk_status"
+          fi
+
+          echo "Snyk test completed with exit code $snyk_status"
 
       - name: Check Snyk Report
+        if: always()
+        shell: bash
         run: |
-          if exist snyk-results.json (
-            echo Snyk report created successfully
-          ) else (
-            echo Snyk report was not created
-            exit /b 1
-          )
+          if [ -s snyk-results.json ]; then
+            echo "Snyk report created successfully"
+          else
+            echo "Snyk report was not created or is empty"
+            exit 1
+          fi
 
       - name: Snyk Monitor
         if: always()
+        shell: bash
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: snyk monitor
 
       - name: Upload Snyk Report
-        if: always() && hashFiles('snyk-results.json') != ''
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: snyk-results
