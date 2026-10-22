@@ -26,61 +26,76 @@ jobs:
         shell: bash
         run: npm --version
 
-      - name: Check Snyk
+      - name: Check Snyk CLI
         shell: bash
         run: |
-          if command -v snyk >/dev/null 2>&1; then
-            snyk --version
-          elif [ -x "$HOME/.npm-global/bin/snyk" ]; then
-            "$HOME/.npm-global/bin/snyk" --version
-          else
-            echo "Snyk CLI not found. Install it for the runner user."
+          SNYK="$HOME/ci-security-lab/tools/node_modules/.bin/snyk"
+
+          if [ ! -x "$SNYK" ]; then
+            echo "Snyk CLI not found at $SNYK"
+            echo "Install it using:"
+            echo 'npm install --prefix "$HOME/ci-security-lab/tools" snyk'
             exit 1
           fi
+
+          "$SNYK" --version
 
       - name: Install Dependencies
         shell: bash
         run: npm ci
 
-      - name: Snyk Test
+      - name: Run Snyk Test
+        id: snyk_test
         shell: bash
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
           set +e
-          snyk test --json > snyk-results.json
+          "$HOME/ci-security-lab/tools/node_modules/.bin/snyk" test \
+            --json > snyk-results.json 2> snyk-stderr.log
           snyk_status=$?
           set -e
 
-          if [ "$snyk_status" -gt 1 ]; then
-            echo "Snyk encountered an error. Check the report and logs."
+          if [ "$snyk_status" -eq 0 ]; then
+            echo "Snyk found no reported vulnerabilities."
+          elif [ "$snyk_status" -eq 1 ]; then
+            echo "Snyk found vulnerabilities. Review the JSON report."
+          else
+            echo "Snyk scan failed with exit code $snyk_status."
+            cat snyk-stderr.log
             exit "$snyk_status"
           fi
 
-          echo "Snyk test completed with exit code $snyk_status"
+          if [ ! -s snyk-results.json ]; then
+            echo "Snyk report is missing or empty."
+            exit 1
+          fi
 
       - name: Check Snyk Report
         if: always()
         shell: bash
         run: |
           if [ -s snyk-results.json ]; then
-            echo "Snyk report created successfully"
+            echo "Snyk report created successfully."
           else
-            echo "Snyk report was not created or is empty"
+            echo "Snyk report was not created or is empty."
             exit 1
           fi
 
       - name: Snyk Monitor
-        if: always()
+        if: success()
         shell: bash
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        run: snyk monitor
+        run: |
+          "$HOME/ci-security-lab/tools/node_modules/.bin/snyk" monitor
 
       - name: Upload Snyk Report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: snyk-results
-          path: snyk-results.json
+          path: |
+            snyk-results.json
+            snyk-stderr.log
           if-no-files-found: ignore
