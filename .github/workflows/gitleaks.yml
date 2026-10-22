@@ -1,45 +1,45 @@
 name: Gitleaks Security Scan
 
 on:
-workflow_call:
+  workflow_call:
 
 jobs:
-gitleaks:
-name: Gitleaks Scan
-runs-on: [self-hosted, runner-1]
+  gitleaks:
+    name: Gitleaks Scan
+    runs-on: [self-hosted, runner-1]
 
-steps:
-  - name: Checkout repository
-    uses: actions/checkout@v4
-    with:
-      fetch-depth: 0
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-  - name: Check Gitleaks version
-    shell: bash
-    run: |
-      set -e
-      GITLEAKS="$HOME/ci-security-lab/tools/gitleaks"
+      - name: Check Gitleaks version
+        shell: bash
+        run: |
+          set -e
+          GITLEAKS="$HOME/ci-security-lab/tools/gitleaks"
 
-      if [ ! -x "$GITLEAKS" ]; then
-        echo "Gitleaks binary not found at $GITLEAKS"
-        exit 1
-      fi
+          if [ ! -x "$GITLEAKS" ]; then
+            echo "Gitleaks binary not found at $GITLEAKS"
+            exit 1
+          fi
 
-      "$GITLEAKS" version
+          "$GITLEAKS" version
 
-  - name: Run Gitleaks scan
-    shell: bash
-    run: |
-      "$HOME/ci-security-lab/tools/gitleaks" detect \
-        --source . \
-        --report-format json \
-        --report-path gitleaks-results.json \
-        --exit-code 0
+      - name: Run Gitleaks scan
+        shell: bash
+        run: |
+          "$HOME/ci-security-lab/tools/gitleaks" detect \
+            --source . \
+            --report-format json \
+            --report-path gitleaks-results.json \
+            --exit-code 0
 
-  - name: Upload Gitleaks report
-    if: always()
-    uses: actions/upload-artifact@v4
-    with:
-      name: gitleaks-report
-      path: gitleaks-results.json
-      if-no-files-found: warn
+      - name: Upload Gitleaks report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: gitleaks-results.json
+          if-no-files-found: warn
