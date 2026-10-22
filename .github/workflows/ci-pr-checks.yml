@@ -46,7 +46,7 @@ jobs:
 
     defaults:
       run:
-        shell: cmd
+        shell: bash
 
     steps:
 
@@ -200,7 +200,7 @@ jobs:
 
     defaults:
       run:
-        shell: cmd
+        shell: bash
 
     steps:
 
