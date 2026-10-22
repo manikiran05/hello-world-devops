@@ -1,3 +1,4 @@
+```yaml
 name: CD Release
 
 on:
@@ -13,73 +14,138 @@ env:
   FRONTEND_IMAGE: mkr05/hello-world-devops-frontend
 
 jobs:
-
   docker-release:
     name: Docker Build, Scan, Push & Manifest Update
     runs-on: [self-hosted, runner-1]
 
     defaults:
       run:
-        shell: cmd
+        shell: bash
 
     steps:
-
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Check Docker
+        run: |
+          docker version
+          docker info
+
       - name: Docker Login
         env:
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-        run: docker login -u %DOCKER_USERNAME% -p %DOCKER_PASSWORD%
+        run: |
+          echo "$DOCKER_PASSWORD" | docker login \
+            --username "$DOCKER_USERNAME" \
+            --password-stdin
 
       - name: Set Image Tag
-        run: echo IMAGE_TAG=%GITHUB_SHA:~0,7%>>%GITHUB_ENV%
+        shell: bash
+        run: echo "IMAGE_TAG=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
-
+      - name: Remove Old Local Images
+        run: |
+          for image in "$BACKEND_IMAGE" "$FRONTEND_IMAGE"; do
+            echo "Removing old local images for $image"
+            docker image ls "$image" --format '{{.ID}}' \
+              | sort -u \
+              | xargs -r docker image rm -f || true
+          done
 
       - name: Build Backend Image
-        run: docker build -t %BACKEND_IMAGE%:%IMAGE_TAG% .
+        run: |
+          docker build \
+            --pull \
+            -t "$BACKEND_IMAGE:$IMAGE_TAG" \
+            .
 
       - name: Scan Backend Image
-        run: docker scout cves %BACKEND_IMAGE%:%IMAGE_TAG%
+        run: |
+          docker scout cves "$BACKEND_IMAGE:$IMAGE_TAG"
 
       - name: Push Backend Image
-        run: docker push %BACKEND_IMAGE%:%IMAGE_TAG%
-
-
+        run: |
+          docker push "$BACKEND_IMAGE:$IMAGE_TAG"
 
       - name: Build Frontend Image
-        run: docker build -t %FRONTEND_IMAGE%:%IMAGE_TAG% ./frontend
+        run: |
+          docker build \
+            --pull \
+            -t "$FRONTEND_IMAGE:$IMAGE_TAG" \
+            ./frontend
 
       - name: Scan Frontend Image
-        run: docker scout cves %FRONTEND_IMAGE%:%IMAGE_TAG%
+        run: |
+          docker scout cves "$FRONTEND_IMAGE:$IMAGE_TAG"
 
       - name: Push Frontend Image
-        run: docker push %FRONTEND_IMAGE%:%IMAGE_TAG%
-
-
+        run: |
+          docker push "$FRONTEND_IMAGE:$IMAGE_TAG"
 
       - name: Update Helm Image Tags
+        env:
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
         run: |
-          powershell.exe -ExecutionPolicy Bypass -Command ^
-          "$file='helm/hello-world-devops/values.yaml'; ^
-          $content=Get-Content $file -Raw; ^
-          $content=$content -replace '(?m)^(\s*backend:\s*\r?\n\s*image:\s*\r?\n\s*repository:.*\r?\n\s*tag:\s*)[^\r\n]+$', '${1}' + [char]34 + $env:IMAGE_TAG + [char]34; ^
-          $content=$content -replace '(?m)^(\s*frontend:\s*\r?\n\s*image:\s*\r?\n\s*repository:.*\r?\n\s*tag:\s*)[^\r\n]+$', '${1}' + [char]34 + $env:IMAGE_TAG + [char]34; ^
-          [System.IO.File]::WriteAllText($file, $content)"
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path("helm/hello-world-devops/values.yaml")
+          if not path.is_file():
+              raise SystemExit(f"Helm values file not found: {path}")
+
+          text = path.read_text()
+          tag = os.environ["IMAGE_TAG"]
+
+          def update_tag(section_name, content):
+              pattern = (
+                  r"(?m)^(" + re.escape(section_name) +
+                  r":\s*\n(?:(?!^\S).*\n)*?"
+                  r"^\s+image:\s*\n(?:(?!^\S).*\n)*?"
+                  r"^\s+tag:\s*).*$"
+              )
+              updated, count = re.subn(
+                  pattern,
+                  lambda m: m.group(1) + '"' + tag + '"',
+                  content,
+                  count=1,
+              )
+              if count != 1:
+                  raise SystemExit(
+                      f"Could not locate {section_name}.image.tag in {path}"
+                  )
+              return updated
+
+          text = update_tag("backend", text)
+          text = update_tag("frontend", text)
+          path.write_text(text)
+          print(f"Updated backend and frontend image tags to {tag}")
+          PY
 
       - name: Commit Helm Update
+        env:
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add helm/hello-world-devops/values.yaml
 
-          git commit -m "Update image tags to %IMAGE_TAG% [skip ci]" || echo No changes to commit
+          if git diff --cached --quiet; then
+            echo "No Helm changes to commit."
+            exit 0
+          fi
 
+          git commit -m "Update image tags to ${IMAGE_TAG} [skip ci]"
           git pull --rebase origin main
+          git push origin HEAD:main
 
-          git push origin main
+      - name: Logout from Docker Hub
+        if: always()
+        run: docker logout || true
+```
