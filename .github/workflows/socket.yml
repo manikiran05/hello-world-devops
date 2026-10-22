@@ -26,9 +26,7 @@ jobs:
           SOCKET="$HOME/ci-security-lab/tools/node_modules/.bin/socket"
 
           if [ ! -x "$SOCKET" ]; then
-            echo "Socket CLI not found at $SOCKET"
-            echo "Install it using:"
-            echo 'npm install --prefix "$HOME/ci-security-lab/tools" socket'
+            echo "Socket CLI not found: $SOCKET"
             exit 1
           fi
 
@@ -37,14 +35,17 @@ jobs:
       - name: Run Socket Scan
         shell: bash
         env:
-          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_TOKEN }}
+          SOCKET_CLI_API_TOKEN: ${{ secrets.SOCKET_TOKEN }}
           SOCKET_ORG: ${{ secrets.SOCKET_ORG }}
         run: |
           SOCKET="$HOME/ci-security-lab/tools/node_modules/.bin/socket"
 
-          "$SOCKET" scan create . --org "$SOCKET_ORG" \
+          set +e
+          "$SOCKET" scan create . \
+            --org "$SOCKET_ORG" \
             > socket-scan-output.txt 2>&1
           scan_status=$?
+          set -e
 
           cat socket-scan-output.txt
           exit "$scan_status"
@@ -54,9 +55,9 @@ jobs:
         shell: bash
         run: |
           if [ -s socket-scan-output.txt ]; then
-            echo "Socket scan output created successfully"
+            echo "Socket scan output created."
           else
-            echo "Socket scan output was not created or is empty"
+            echo "Socket scan output is missing or empty."
             exit 1
           fi
 
