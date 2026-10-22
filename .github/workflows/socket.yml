@@ -1,11 +1,10 @@
 name: Socket.dev Security Scan
 
 on:
-  workflow_dispatch:
-  push:
+  workflow_call:
+  pull_request:
     branches:
       - main
-  pull_request:
 
 permissions:
   contents: read
