@@ -20,7 +20,7 @@ foreach ($result in $report.Results) {
 
     # Process every vulnerability
     foreach ($vuln in $result.Vulnerabilities) {
-
+ 
         $line = ""
 
         # Find package location
