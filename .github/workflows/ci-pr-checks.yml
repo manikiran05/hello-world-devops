@@ -63,7 +63,8 @@ jobs:
         run: npm ci
 
       - name: NJSSCAN
-        run: njsscan .
+        run: |
+          "$HOME/njsscan-venv/bin/njsscan" .
 
       - name: Biome Check
         run: npm run format:check
