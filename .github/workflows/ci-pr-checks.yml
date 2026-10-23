@@ -63,8 +63,11 @@ jobs:
         run: npm ci
 
       - name: NJSSCAN
+        shell: bash
         run: |
-          "$HOME/njsscan-venv/bin/njsscan" .
+          export PATH="$HOME/njsscan-venv/bin:$PATH"
+          semgrep --version
+          njsscan --json -o njsscan-report.json .
 
       - name: Biome Check
         run: npm run format:check
