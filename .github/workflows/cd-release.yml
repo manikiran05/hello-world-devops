@@ -1,3 +1,4 @@
+
 name: CD Release
 
 on:
@@ -13,7 +14,6 @@ env:
   FRONTEND_IMAGE: mkr05/hello-world-devops-frontend
 
 jobs:
-
   docker-release:
     name: Docker Build, Scan, Push & Manifest Update
     runs-on: [self-hosted, runner-1]
@@ -23,7 +23,6 @@ jobs:
         shell: bash
 
     steps:
-
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
@@ -33,53 +32,92 @@ jobs:
         env:
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-        run: docker login -u %DOCKER_USERNAME% -p %DOCKER_PASSWORD%
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOCKER_USERNAME" || -z "$DOCKER_PASSWORD" ]]; then
+            echo "::error::Docker Hub credentials are missing."
+            exit 1
+          fi
+          echo "$DOCKER_PASSWORD" | docker login \
+            --username "$DOCKER_USERNAME" \
+            --password-stdin
 
       - name: Set Image Tag
-        run: echo IMAGE_TAG=%GITHUB_SHA:~0,7%>>%GITHUB_ENV%
-
-
+        run: |
+          IMAGE_TAG="${GITHUB_SHA::7}"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+          echo "Using image tag: $IMAGE_TAG"
 
       - name: Build Backend Image
-        run: docker build -t %BACKEND_IMAGE%:%IMAGE_TAG% .
+        run: |
+          docker build -t "$BACKEND_IMAGE:$IMAGE_TAG" .
 
       - name: Scan Backend Image
-        run: docker scout cves %BACKEND_IMAGE%:%IMAGE_TAG%
+        run: |
+          docker scout cves "$BACKEND_IMAGE:$IMAGE_TAG"
 
       - name: Push Backend Image
-        run: docker push %BACKEND_IMAGE%:%IMAGE_TAG%
-
-
+        run: |
+          docker push "$BACKEND_IMAGE:$IMAGE_TAG"
 
       - name: Build Frontend Image
-        run: docker build -t %FRONTEND_IMAGE%:%IMAGE_TAG% ./frontend
+        run: |
+          docker build -t "$FRONTEND_IMAGE:$IMAGE_TAG" ./frontend
 
       - name: Scan Frontend Image
-        run: docker scout cves %FRONTEND_IMAGE%:%IMAGE_TAG%
+        run: |
+          docker scout cves "$FRONTEND_IMAGE:$IMAGE_TAG"
 
       - name: Push Frontend Image
-        run: docker push %FRONTEND_IMAGE%:%IMAGE_TAG%
-
-
+        run: |
+          docker push "$FRONTEND_IMAGE:$IMAGE_TAG"
 
       - name: Update Helm Image Tags
         run: |
-          powershell.exe -ExecutionPolicy Bypass -Command ^
-          "$file='helm/hello-world-devops/values.yaml'; ^
-          $content=Get-Content $file -Raw; ^
-          $content=$content -replace '(?m)^(\s*backend:\s*\r?\n\s*image:\s*\r?\n\s*repository:.*\r?\n\s*tag:\s*)[^\r\n]+$', '${1}' + [char]34 + $env:IMAGE_TAG + [char]34; ^
-          $content=$content -replace '(?m)^(\s*frontend:\s*\r?\n\s*image:\s*\r?\n\s*repository:.*\r?\n\s*tag:\s*)[^\r\n]+$', '${1}' + [char]34 + $env:IMAGE_TAG + [char]34; ^
-          [System.IO.File]::WriteAllText($file, $content)"
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path("helm/hello-world-devops/values.yaml")
+          content = path.read_text()
+          tag = os.environ["IMAGE_TAG"]
+
+          for section in ("backend", "frontend"):
+              pattern = (
+                  rf"(?ms)^({section}:\s*\n.*?)"
+                  rf"(^[ \t]+tag:\s*)[^\r\n]*"
+              )
+              content, count = re.subn(
+                  pattern,
+                  lambda m: m.group(1) + m.group(2) + f'"{tag}"',
+                  content,
+                  count=1,
+              )
+              if count != 1:
+                  raise SystemExit(
+                      f"Could not uniquely update {section}.image.tag "
+                      "in values.yaml"
+                  )
+
+          path.write_text(content)
+          print(f"Updated backend and frontend image tags to {tag}")
+          PY
 
       - name: Commit Helm Update
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add helm/hello-world-devops/values.yaml
 
-          git commit -m "Update image tags to %IMAGE_TAG% [skip ci]" || echo No changes to commit
+          if git diff --cached --quiet; then
+            echo "No Helm changes to commit."
+            exit 0
+          fi
 
           git pull --rebase origin main
-
-          git push origin main
+          git add helm/hello-world-devops/values.yaml
+          git commit -m "Update image tags to $IMAGE_TAG [skip ci]"
+          git push origin HEAD:main
