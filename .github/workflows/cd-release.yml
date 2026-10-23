@@ -104,11 +104,12 @@ jobs:
           print(f"Updated backend and frontend image tags to {tag}")
           PY
 
+
       - name: Commit Helm Update
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email \
-            "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add helm/hello-world-devops/values.yaml
 
@@ -117,7 +118,5 @@ jobs:
             exit 0
           fi
 
-          git pull --rebase origin main
-          git add helm/hello-world-devops/values.yaml
           git commit -m "Update image tags to $IMAGE_TAG [skip ci]"
           git push origin HEAD:main
