@@ -1,10 +1,14 @@
+
 replicaCount: 1
+
+imagePullSecrets:
+  - name: dockerhub-secret
 
 backend:
   replicaCount: 1
 
   image:
-    repository: hello-world-backend
+    repository: mkr05/hello-world-devops-backend
     tag: "dbafb2b"
     pullPolicy: IfNotPresent
 
@@ -25,7 +29,7 @@ frontend:
   replicaCount: 1
 
   image:
-    repository: hello-world-frontend
+    repository: mkr05/hello-world-devops-frontend
     tag: "dbafb2b"
     pullPolicy: IfNotPresent
 
