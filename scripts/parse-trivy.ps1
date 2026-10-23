@@ -17,7 +17,7 @@ foreach ($result in $report.Results) {
     if ($null -eq $result.Vulnerabilities) {
         continue
     }
-
+ 
     # Process every vulnerability
     foreach ($vuln in $result.Vulnerabilities) {
  
