@@ -41,9 +41,7 @@ jobs:
             fi
           done
 
-          echo "Backend and frontend source directories found."
-
-      - name: Trivy Source Scan
+      - name: Trivy Backend Source Scan
         shell: bash
         run: |
           set -euo pipefail
@@ -56,9 +54,61 @@ jobs:
             --cache-dir "$CACHE_DIR" \
             --scanners vuln,secret \
             --format json \
-            --output trivy-results.json \
+            --output trivy-backend-results.json \
             --exit-code 0 \
-            src frontend/src
+            src
+
+      - name: Trivy Frontend Source Scan
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TRIVY="$HOME/ci-security-lab/tools/trivy"
+          CACHE_DIR="$(mktemp -d)"
+          trap 'rm -rf "$CACHE_DIR"' EXIT
+
+          "$TRIVY" fs \
+            --cache-dir "$CACHE_DIR" \
+            --scanners vuln,secret \
+            --format json \
+            --output trivy-frontend-results.json \
+            --exit-code 0 \
+            frontend/src
+
+      - name: Combine Trivy Reports
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          reports = []
+          for filename in (
+              "trivy-backend-results.json",
+              "trivy-frontend-results.json",
+          ):
+              path = Path(filename)
+              if not path.is_file() or path.stat().st_size == 0:
+                  raise SystemExit(f"Missing or empty report: {filename}")
+
+              reports.append(json.loads(path.read_text()))
+
+          combined = {
+              "SchemaVersion": reports[0].get("SchemaVersion", 2),
+              "ArtifactName": "hello-world-devops-source",
+              "Results": [
+                  result
+                  for report in reports
+                  for result in report.get("Results", [])
+              ],
+          }
+
+          Path("trivy-results.json").write_text(
+              json.dumps(combined, indent=2) + "\n"
+          )
+          print("Combined backend and frontend Trivy reports.")
+          PY
 
       - name: Check Trivy Report
         if: always()
