@@ -1,3 +1,4 @@
+
 name: Reusable Trivy
 
 on:
@@ -28,22 +29,45 @@ jobs:
 
           "$TRIVY" --version
 
-      - name: Trivy Filesystem Scan
+      - name: Validate Source Directories
         shell: bash
         run: |
-          "$HOME/ci-security-lab/tools/trivy" fs . \
+          set -euo pipefail
+
+          for dir in src frontend/src; do
+            if [ ! -d "$dir" ]; then
+              echo "ERROR: Source directory '$dir' does not exist."
+              exit 1
+            fi
+          done
+
+          echo "Backend and frontend source directories found."
+
+      - name: Trivy Source Scan
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TRIVY="$HOME/ci-security-lab/tools/trivy"
+          CACHE_DIR="$(mktemp -d)"
+          trap 'rm -rf "$CACHE_DIR"' EXIT
+
+          "$TRIVY" fs \
+            --cache-dir "$CACHE_DIR" \
+            --scanners vuln,secret \
             --format json \
             --output trivy-results.json \
-            --exit-code 0
+            --exit-code 0 \
+            src frontend/src
 
       - name: Check Trivy Report
         if: always()
         shell: bash
         run: |
           if [ -s trivy-results.json ]; then
-            echo "Trivy JSON report created successfully"
+            echo "Trivy JSON report created successfully."
           else
-            echo "Trivy JSON report was not created or is empty"
+            echo "ERROR: Trivy JSON report was not created or is empty."
             exit 1
           fi
 
@@ -54,3 +78,4 @@ jobs:
           name: trivy-results
           path: trivy-results.json
           if-no-files-found: ignore
+          retention-days: 7
