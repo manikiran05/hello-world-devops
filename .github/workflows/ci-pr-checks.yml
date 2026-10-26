@@ -1,3 +1,4 @@
+
 name: CI Pipeline
 
 on:
@@ -12,10 +13,12 @@ on:
   workflow_dispatch:
     inputs:
       security_scan:
-        description: "Select check or security scan to run"
+        description: "Select an individual check or run all checks"
         required: true
         type: choice
+        default: all
         options:
+          - all
           - test
           - sonarqube
           - codeql
@@ -30,18 +33,12 @@ permissions:
   security-events: write
 
 jobs:
-
-
   test:
     name: Test & Quality
-
     if: |
-      github.event_name == 'pull_request' ||
-      (
-        github.event_name == 'workflow_dispatch' &&
-        github.event.inputs.security_scan == 'test'
-      )
-
+      github.event_name != 'workflow_dispatch' ||
+      inputs.security_scan == 'all' ||
+      inputs.security_scan == 'test'
     runs-on: [self-hosted, runner-1]
 
     defaults:
@@ -49,7 +46,6 @@ jobs:
         shell: bash
 
     steps:
-
       - name: Checkout Code
         uses: actions/checkout@v4
 
@@ -63,10 +59,9 @@ jobs:
         run: npm ci
 
       - name: NJSSCAN
-        shell: bash
         run: |
           export PATH="$HOME/njsscan-venv/bin:$PATH"
-          semgrep --version
+          njsscan --version
           njsscan --json -o njsscan-report.json .
 
       - name: Biome Check
@@ -75,119 +70,67 @@ jobs:
       - name: ESLint
         run: npm run lint
 
-
-
   sonarqube:
     name: SonarQube Security Scan
-
     if: |
-      github.event_name == 'pull_request' ||
-      (
-        github.event_name == 'workflow_dispatch' &&
-        github.event.inputs.security_scan == 'sonarqube'
-      )
-
+      github.event_name != 'workflow_dispatch' ||
+      inputs.security_scan == 'all' ||
+      inputs.security_scan == 'sonarqube'
     uses: ./.github/workflows/sonarqube.yml
-
     secrets: inherit
-
-
 
   codeql:
     name: CodeQL Security Scan
-
     if: |
-      github.event_name == 'pull_request' ||
-      (
-        github.event_name == 'workflow_dispatch' &&
-        github.event.inputs.security_scan == 'codeql'
-      )
-
+      github.event_name != 'workflow_dispatch' ||
+      inputs.security_scan == 'all' ||
+      inputs.security_scan == 'codeql'
     uses: ./.github/workflows/codeql.yml
-
-
-
 
   trivy:
     name: Trivy Security Scan
-
     if: |
-      github.event_name == 'pull_request' ||
-      (
-        github.event_name == 'workflow_dispatch' &&
-        github.event.inputs.security_scan == 'trivy'
-      )
-
+      github.event_name != 'workflow_dispatch' ||
+      inputs.security_scan == 'all' ||
+      inputs.security_scan == 'trivy'
     uses: ./.github/workflows/trivy.yml
-
-
 
   snyk:
     name: Snyk Security Scan
-
     if: |
-      github.event_name == 'pull_request' ||
-      (
-        github.event_name == 'workflow_dispatch' &&
-        github.event.inputs.security_scan == 'snyk'
-      )
-
+      github.event_name != 'workflow_dispatch' ||
+      inputs.security_scan == 'all' ||
+      inputs.security_scan == 'snyk'
     uses: ./.github/workflows/snyk.yml
-
     secrets: inherit
-
-
-
 
   semgrep:
     name: Semgrep Security Scan
-
     if: |
-      github.event_name == 'pull_request' ||
-      (
-        github.event_name == 'workflow_dispatch' &&
-        github.event.inputs.security_scan == 'semgrep'
-      )
-
+      github.event_name != 'workflow_dispatch' ||
+      inputs.security_scan == 'all' ||
+      inputs.security_scan == 'semgrep'
     uses: ./.github/workflows/semgrep.yml
-
-
 
   gitleaks:
     name: Gitleaks Security Scan
-
     if: |
-      github.event_name == 'pull_request' ||
-      (
-        github.event_name == 'workflow_dispatch' &&
-        github.event.inputs.security_scan == 'gitleaks'
-      )
-
+      github.event_name != 'workflow_dispatch' ||
+      inputs.security_scan == 'all' ||
+      inputs.security_scan == 'gitleaks'
     uses: ./.github/workflows/gitleaks.yml
-
-
-
 
   socket:
     name: Socket.dev Security Scan
-
     if: |
-      github.event_name == 'pull_request' ||
-      (
-        github.event_name == 'workflow_dispatch' &&
-        github.event.inputs.security_scan == 'socket'
-      )
-
+      github.event_name != 'workflow_dispatch' ||
+      inputs.security_scan == 'all' ||
+      inputs.security_scan == 'socket'
     uses: ./.github/workflows/socket.yml
-
     secrets: inherit
-
-
-
 
   summary:
     name: CI Summary
-
     needs:
       - test
       - sonarqube
@@ -199,7 +142,6 @@ jobs:
       - socket
 
     if: always()
-
     runs-on: [self-hosted, runner-1]
 
     defaults:
@@ -207,9 +149,7 @@ jobs:
         shell: bash
 
     steps:
-
       - name: Generate CI Summary
-
         env:
           TEST_RESULT: ${{ needs.test.result }}
           SONAR_RESULT: ${{ needs.sonarqube.result }}
@@ -233,5 +173,5 @@ jobs:
             echo "| Snyk | $SNYK_RESULT |"
             echo "| Semgrep | $SEMGREP_RESULT |"
             echo "| Gitleaks | $GITLEAKS_RESULT |"
-            echo "| Socket.dev / Local Scan | $SOCKET_RESULT |"
+            echo "| Socket.dev | $SOCKET_RESULT |"
           } >> "$GITHUB_STEP_SUMMARY"
