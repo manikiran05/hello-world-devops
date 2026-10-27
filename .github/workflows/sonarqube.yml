@@ -16,6 +16,7 @@ jobs:
   sonarqube:
     name: SonarQube Scan and Quality Gate
     runs-on: [self-hosted, runner-2]
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
