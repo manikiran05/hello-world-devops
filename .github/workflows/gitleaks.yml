@@ -7,6 +7,7 @@ jobs:
   gitleaks:
     name: Gitleaks Scan
     runs-on: [self-hosted, runner-1]
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repository
@@ -34,7 +35,8 @@ jobs:
             --source . \
             --report-format json \
             --report-path gitleaks-results.json \
-            --exit-code 0
+            --redact \
+            --exit-code 1
 
       - name: Upload Gitleaks report
         if: always()
