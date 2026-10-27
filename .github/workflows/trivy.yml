@@ -12,6 +12,7 @@ jobs:
   trivy:
     name: Trivy Security Scan
     runs-on: [self-hosted, runner-4]
+    timeout-minutes: 20
 
     steps:
       - name: Checkout Code
@@ -120,6 +121,27 @@ jobs:
             echo "ERROR: Trivy JSON report was not created or is empty."
             exit 1
           fi
+
+      # Blocking gate: fail on fixable HIGH/CRITICAL vulnerabilities or any
+      # secret across the whole repo (lockfile, Dockerfile, helm, source).
+      # The reports above are always produced and uploaded for review.
+      - name: Trivy Gate (HIGH/CRITICAL, fixable only)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TRIVY="$HOME/ci-security-lab/tools/trivy"
+          CACHE_DIR="$(mktemp -d)"
+          trap 'rm -rf "$CACHE_DIR"' EXIT
+
+          "$TRIVY" fs \
+            --cache-dir "$CACHE_DIR" \
+            --scanners vuln,secret \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --skip-dirs node_modules,frontend/node_modules \
+            --exit-code 1 \
+            .
 
       - name: Upload Trivy JSON Report
         if: always()
