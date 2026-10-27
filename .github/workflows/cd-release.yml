@@ -62,11 +62,11 @@ jobs:
 
       - name: Build Backend Image
         run: |
-          docker build -t "$BACKEND_IMAGE:$IMAGE_TAG" .
-
+          docker build --pull -t "$BACKEND_IMAGE:$IMAGE_TAG" .
+      
       - name: Build Frontend Image
         run: |
-          docker build -t "$FRONTEND_IMAGE:$IMAGE_TAG" ./frontend
+          docker build --pull -t "$FRONTEND_IMAGE:$IMAGE_TAG" ./frontend
 
       # Blocking gates: docker scout exits 2 when it finds critical or high
       # vulnerabilities, which fails the job before anything is pushed.
