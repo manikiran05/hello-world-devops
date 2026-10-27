@@ -1,42 +1,222 @@
-name: Reusable CodeQL
+
+name: CI Pipeline
 
 on:
-  workflow_call:
+  push:
+    branches:
+      - "feature/**"
+
+  pull_request:
+    branches:
+      - main
+
+  workflow_dispatch:
+    inputs:
+      security_scan:
+        description: "Select an individual check or run all checks"
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - test
+          - sonarqube
+          - codeql
+          - trivy
+          - snyk
+          - semgrep
+          - gitleaks
+          - socket
 
 permissions:
   contents: read
   security-events: write
 
+# Cancel superseded runs of the same branch/PR so stale pipelines
+# do not queue up on the self-hosted runners.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  codeql:
-    name: CodeQL Security Scan
-    runs-on: [self-hosted, runner-3]
-    timeout-minutes: 30
+  test:
+    name: Test & Quality
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      inputs.security_scan == 'all' ||
+      inputs.security_scan == 'test'
+    runs-on: [self-hosted, runner-1]
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          languages: javascript-typescript
+          node-version: 22
+          cache: npm
 
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v4
+      - name: Check Node.js
+        run: node --version
 
-      - name: Analyze CodeQL
-        uses: github/codeql-action/analyze@v4
-        with:
-          category: "/language:javascript-typescript"
-          upload: false
+      - name: Check npm
+        run: npm --version
 
-      - name: Upload CodeQL SARIF
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Unit Tests
+        run: npm test
+
+      - name: NJSSCAN
+        run: |
+          export PATH="$HOME/njsscan-venv/bin:$PATH"
+          njsscan --version
+          njsscan --json -o njsscan-report.json .
+
+      - name: Biome Check
+        run: npm run format:check
+
+      - name: ESLint
+        run: npm run lint
+
+  sonarqube:
+    name: SonarQube Security Scan
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      inputs.security_scan == 'all' ||
+      inputs.security_scan == 'sonarqube'
+    uses: ./.github/workflows/sonarqube.yml
+    secrets: inherit
+
+  codeql:
+    name: CodeQL Security Scan
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      inputs.security_scan == 'all' ||
+      inputs.security_scan == 'codeql'
+    uses: ./.github/workflows/codeql.yml
+
+  trivy:
+    name: Trivy Security Scan
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      inputs.security_scan == 'all' ||
+      inputs.security_scan == 'trivy'
+    uses: ./.github/workflows/trivy.yml
+
+  snyk:
+    name: Snyk Security Scan
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      inputs.security_scan == 'all' ||
+      inputs.security_scan == 'snyk'
+    uses: ./.github/workflows/snyk.yml
+    secrets: inherit
+
+  semgrep:
+    name: Semgrep Security Scan
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      inputs.security_scan == 'all' ||
+      inputs.security_scan == 'semgrep'
+    uses: ./.github/workflows/semgrep.yml
+
+  gitleaks:
+    name: Gitleaks Security Scan
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      inputs.security_scan == 'all' ||
+      inputs.security_scan == 'gitleaks'
+    uses: ./.github/workflows/gitleaks.yml
+
+  socket:
+    name: Socket.dev Security Scan
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      inputs.security_scan == 'all' ||
+      inputs.security_scan == 'socket'
+    uses: ./.github/workflows/socket.yml
+    secrets: inherit
+
+  summary:
+    name: CI Summary
+    needs:
+      - test
+      - sonarqube
+      - codeql
+      - trivy
+      - snyk
+      - semgrep
+      - gitleaks
+      - socket
+
+    if: always()
+    runs-on: [self-hosted, runner-1]
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Generate CI Summary
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+          SONAR_RESULT: ${{ needs.sonarqube.result }}
+          CODEQL_RESULT: ${{ needs.codeql.result }}
+          TRIVY_RESULT: ${{ needs.trivy.result }}
+          SNYK_RESULT: ${{ needs.snyk.result }}
+          SEMGREP_RESULT: ${{ needs.semgrep.result }}
+          GITLEAKS_RESULT: ${{ needs.gitleaks.result }}
+          SOCKET_RESULT: ${{ needs.socket.result }}
+
+        run: |
+          {
+            echo "# CI Pipeline Report"
+            echo
+            echo "| Check | Status |"
+            echo "|---|---|"
+            echo "| Test & Quality | $TEST_RESULT |"
+            echo "| SonarQube | $SONAR_RESULT |"
+            echo "| CodeQL | $CODEQL_RESULT |"
+            echo "| Trivy | $TRIVY_RESULT |"
+            echo "| Snyk | $SNYK_RESULT |"
+            echo "| Semgrep | $SEMGREP_RESULT |"
+            echo "| Gitleaks | $GITLEAKS_RESULT |"
+            echo "| Socket.dev | $SOCKET_RESULT |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Single gate: make this job ("CI Summary") the one required status
+      # check in branch protection. Skipped jobs (workflow_dispatch with a
+      # single selected check) are fine; failed or cancelled ones are not.
+      - name: Enforce CI Gate
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: codeql-results
-          path: |
-            ${{ runner.temp }}/codeql_databases/**/*.sarif
-            ${{ runner.temp }}/codeql_databases/**/*.sarif.gz
-          if-no-files-found: warn
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          bad = {
+              name: info.get("result")
+              for name, info in needs.items()
+              if info.get("result") in ("failure", "cancelled")
+          }
+
+          if bad:
+              for name, result in sorted(bad.items()):
+                  print(f"::error::{name} finished with result: {result}")
+              sys.exit(1)
+
+          print("All required CI checks passed or were intentionally skipped.")
+          PY
