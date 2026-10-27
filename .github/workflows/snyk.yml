@@ -13,6 +13,7 @@ jobs:
   snyk:
     name: Snyk Security Scan
     runs-on: [self-hosted, runner-5]
+    timeout-minutes: 20
 
     steps:
       - name: Checkout Code
@@ -52,6 +53,7 @@ jobs:
         run: |
           set +e
           "$HOME/ci-security-lab/tools/node_modules/.bin/snyk" test \
+            --severity-threshold=high \
             --json > snyk-results.json 2> snyk-stderr.log
           snyk_status=$?
           set -e
@@ -59,7 +61,8 @@ jobs:
           if [ "$snyk_status" -eq 0 ]; then
             echo "Snyk found no reported vulnerabilities."
           elif [ "$snyk_status" -eq 1 ]; then
-            echo "Snyk found vulnerabilities. Review the JSON report."
+            echo "::error::Snyk found high or critical vulnerabilities. Review the JSON report."
+            exit 1
           else
             echo "Snyk scan failed with exit code $snyk_status."
             cat snyk-stderr.log
