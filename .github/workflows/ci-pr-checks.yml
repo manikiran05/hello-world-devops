@@ -195,7 +195,7 @@ jobs:
 
       # Single gate: make this job ("CI Summary") the one required status
       # check in branch protection. Skipped jobs (workflow_dispatch with a
-      # single selected check) are fine; failed or cancelled ones are not.
+      # single selected checks are fine; failed or cancelled ones are not.
       - name: Enforce CI Gate
         if: always()
         env:
