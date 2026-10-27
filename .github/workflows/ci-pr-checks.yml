@@ -146,7 +146,6 @@ jobs:
       inputs.security_scan == 'all' ||
       inputs.security_scan == 'socket'
     uses: ./.github/workflows/socket.yml
-    secrets: inherit
 
   summary:
     name: CI Summary
