@@ -11,6 +11,7 @@ jobs:
   semgrep:
     name: Semgrep Security Scan
     runs-on: [self-hosted, runner-6]
+    timeout-minutes: 20
 
     defaults:
       run:
@@ -34,9 +35,11 @@ jobs:
           SEMGREP_CACHE_DIR: ${{ github.workspace }}/../../cache/semgrep
         run: |
           mkdir -p "$GITHUB_WORKSPACE/semgrep-cache"
+          # Blocking gate: any finding of severity ERROR fails the job.
+          # The SARIF report is still written and uploaded by later steps.
           "$HOME/ci-security-lab/tools/python-env/bin/semgrep" \
-            scan --config auto --sarif \
-            --output semgrep-results.sarif . || true
+            scan --config auto --severity ERROR --error --sarif \
+            --output semgrep-results.sarif .
 
       - name: Check Semgrep Report
         if: always()
