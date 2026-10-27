@@ -6,7 +6,7 @@ backend:
 
   image:
     repository: mkr05/hello-world-devops-backend
-    tag: "496ebd2"
+    tag: "b1e73bd"
     pullPolicy: IfNotPresent
 
   resources:
@@ -27,7 +27,7 @@ frontend:
 
   image:
     repository: mkr05/hello-world-devops-frontend
-    tag: "496ebd2"
+    tag: "b1e73bd"
     pullPolicy: IfNotPresent
 
   resources:
