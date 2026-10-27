@@ -1,16 +1,16 @@
+```yaml
 name: CD Release
 
 on:
   push:
     branches:
       - main
-    # Ignore Helm-only manifest PR merges to prevent a release loop.
+    # Prevent the Helm tag commit from triggering another release.
     paths-ignore:
       - "helm/**"
 
 permissions:
   contents: write
-  pull-requests: write
 
 # Never cancel an active release.
 concurrency:
@@ -23,7 +23,7 @@ env:
 
 jobs:
   docker-release:
-    name: Docker Build, Scan, Push & Manifest PR
+    name: Docker Build, Scan, Push & Update Helm Tags
     runs-on: [self-hosted, runner-1]
     timeout-minutes: 30
 
@@ -68,13 +68,13 @@ jobs:
           set -euo pipefail
           docker build --pull -t "$FRONTEND_IMAGE:$IMAGE_TAG" ./frontend
 
-      # Diagnostic only. This does not replace or bypass the security gate.
+      # Diagnostic only; the security scans below remain blocking.
       - name: Frontend Base Image Recommendations
         continue-on-error: true
         run: |
           docker scout recommendations "$FRONTEND_IMAGE:$IMAGE_TAG"
 
-      # Blocking security gates: fail on any HIGH or CRITICAL finding.
+      # Both scans must pass before either image is pushed.
       - name: Scan Backend Image
         run: |
           set -euo pipefail
@@ -91,7 +91,6 @@ jobs:
             --exit-code \
             "$FRONTEND_IMAGE:$IMAGE_TAG"
 
-      # Push only after both images pass their security scans.
       - name: Push Backend Image
         run: |
           set -euo pipefail
@@ -120,6 +119,7 @@ jobs:
                   rf"(?ms)^({section}:\s*\n.*?)"
                   rf"(^[ \t]+tag:\s*)[^\r\n]*"
               )
+
               content, count = re.subn(
                   pattern,
                   lambda m: m.group(1) + m.group(2) + f'"{tag}"',
@@ -129,7 +129,7 @@ jobs:
 
               if count != 1:
                   raise SystemExit(
-                      f"Could not uniquely update {section}.image.tag "
+                      f"Could not uniquely update {section} image tag "
                       "in values.yaml"
                   )
 
@@ -137,25 +137,25 @@ jobs:
           print(f"Updated backend and frontend image tags to {tag}")
           PY
 
-      # Open a PR instead of pushing manifest changes directly to main.
-      # CD_PR_TOKEN is recommended if the PR must trigger other workflows.
-      - name: Open Helm Update Pull Request
-        uses: peter-evans/create-pull-request@v7
-        with:
-          token: ${{ secrets.CD_PR_TOKEN || secrets.GITHUB_TOKEN }}
-          branch: cd/update-image-tags
-          base: main
-          add-paths: helm/hello-world-devops/values.yaml
-          commit-message: "Update image tags to ${{ env.IMAGE_TAG }}"
-          title: "Deploy ${{ env.IMAGE_TAG }}: update Helm image tags"
-          body: |
-            Automated release PR created by the CD Release workflow.
+      - name: Commit and Push Helm Changes to Main
+        run: |
+          set -euo pipefail
 
-            - Backend image: `${{ env.BACKEND_IMAGE }}:${{ env.IMAGE_TAG }}`
-            - Frontend image: `${{ env.FRONTEND_IMAGE }}:${{ env.IMAGE_TAG }}`
-            - Source commit: ${{ github.sha }}
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
 
-            Both images passed the HIGH/CRITICAL vulnerability scans and
-            were pushed before this PR was opened. Merging it makes ArgoCD
-            roll out the new tags; the Deploy Verify workflow then smoke-tests it.
-          delete-branch: true
+          git add helm/hello-world-devops/values.yaml
+
+          if git diff --cached --quiet; then
+            echo "Helm image tags are already up to date."
+            exit 0
+          fi
+
+          git commit -m "chore: update Helm image tags to $IMAGE_TAG"
+          git push origin HEAD:main
+
+      - name: Logout from Docker Hub
+        if: always()
+        run: docker logout
+```
