@@ -93,7 +93,9 @@ jobs:
       inputs.security_scan == 'all' ||
       inputs.security_scan == 'sonarqube'
     uses: ./.github/workflows/sonarqube.yml
-    secrets: inherit
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
   codeql:
     name: CodeQL Security Scan
@@ -118,7 +120,8 @@ jobs:
       inputs.security_scan == 'all' ||
       inputs.security_scan == 'snyk'
     uses: ./.github/workflows/snyk.yml
-    secrets: inherit
+    secrets:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
   semgrep:
     name: Semgrep Security Scan
