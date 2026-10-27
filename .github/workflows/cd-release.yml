@@ -4,20 +4,15 @@ on:
   push:
     branches:
       - main
-    # The manifest-update PR only touches helm/. Ignoring it here prevents the
-    # merge of that PR from triggering another build/release loop. The
-    # Deploy Verify workflow handles that merge instead.
+    # Ignore Helm-only manifest PR merges to prevent a release loop.
     paths-ignore:
       - "helm/**"
 
-# contents: write is needed to push the update branch, pull-requests: write
-# to open the PR. Nothing in this workflow pushes directly to main.
 permissions:
   contents: write
   pull-requests: write
 
-# Never cancel a release that is already running (half-pushed images, half
-# updated manifests). Newer runs wait their turn instead.
+# Never cancel an active release.
 concurrency:
   group: cd-release-main
   cancel-in-progress: false
@@ -46,32 +41,43 @@ jobs:
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
         run: |
           set -euo pipefail
+
           if [[ -z "$DOCKER_USERNAME" || -z "$DOCKER_PASSWORD" ]]; then
             echo "::error::Docker Hub credentials are missing."
             exit 1
           fi
+
           echo "$DOCKER_PASSWORD" | docker login \
             --username "$DOCKER_USERNAME" \
             --password-stdin
 
       - name: Set Image Tag
         run: |
+          set -euo pipefail
           IMAGE_TAG="${GITHUB_SHA::7}"
           echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
           echo "Using image tag: $IMAGE_TAG"
 
       - name: Build Backend Image
         run: |
+          set -euo pipefail
           docker build --pull -t "$BACKEND_IMAGE:$IMAGE_TAG" .
-      
+
       - name: Build Frontend Image
         run: |
+          set -euo pipefail
           docker build --pull -t "$FRONTEND_IMAGE:$IMAGE_TAG" ./frontend
 
-      # Blocking gates: docker scout exits 2 when it finds critical or high
-      # vulnerabilities, which fails the job before anything is pushed.
+      # Diagnostic only. This does not replace or bypass the security gate.
+      - name: Frontend Base Image Recommendations
+        continue-on-error: true
+        run: |
+          docker scout recommendations "$FRONTEND_IMAGE:$IMAGE_TAG"
+
+      # Blocking security gates: fail on any HIGH or CRITICAL finding.
       - name: Scan Backend Image
         run: |
+          set -euo pipefail
           docker scout cves \
             --only-severity critical,high \
             --exit-code \
@@ -79,22 +85,27 @@ jobs:
 
       - name: Scan Frontend Image
         run: |
+          set -euo pipefail
           docker scout cves \
             --only-severity critical,high \
             --exit-code \
             "$FRONTEND_IMAGE:$IMAGE_TAG"
 
-      # Push only after both images built and passed their scans.
+      # Push only after both images pass their security scans.
       - name: Push Backend Image
         run: |
+          set -euo pipefail
           docker push "$BACKEND_IMAGE:$IMAGE_TAG"
 
       - name: Push Frontend Image
         run: |
+          set -euo pipefail
           docker push "$FRONTEND_IMAGE:$IMAGE_TAG"
 
       - name: Update Helm Image Tags
         run: |
+          set -euo pipefail
+
           python3 - <<'PY'
           import os
           import re
@@ -115,6 +126,7 @@ jobs:
                   content,
                   count=1,
               )
+
               if count != 1:
                   raise SystemExit(
                       f"Could not uniquely update {section}.image.tag "
@@ -125,13 +137,8 @@ jobs:
           print(f"Updated backend and frontend image tags to {tag}")
           PY
 
-      # Instead of pushing to main, open (or update) a pull request so the
-      # manifest change goes through branch protection and review.
-      #
-      # Note: PRs created with the default GITHUB_TOKEN do not trigger other
-      # workflows, so required status checks would never report on this PR.
-      # Add a fine-grained PAT (or GitHub App token) as the CD_PR_TOKEN secret
-      # so CI runs on it; without it the step falls back to GITHUB_TOKEN.
+      # Open a PR instead of pushing manifest changes directly to main.
+      # CD_PR_TOKEN is recommended if the PR must trigger other workflows.
       - name: Open Helm Update Pull Request
         uses: peter-evans/create-pull-request@v7
         with:
@@ -148,7 +155,7 @@ jobs:
             - Frontend image: `${{ env.FRONTEND_IMAGE }}:${{ env.IMAGE_TAG }}`
             - Source commit: ${{ github.sha }}
 
-            Both images were built, scanned (no critical/high findings) and
-            pushed before this PR was opened. Merging it makes ArgoCD roll
-            the new tag out; the Deploy Verify workflow then smoke-tests it.
+            Both images passed the HIGH/CRITICAL vulnerability scans and
+            were pushed before this PR was opened. Merging it makes ArgoCD
+            roll out the new tags; the Deploy Verify workflow then smoke-tests it.
           delete-branch: true
