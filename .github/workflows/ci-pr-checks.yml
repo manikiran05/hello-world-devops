@@ -32,6 +32,12 @@ permissions:
   contents: read
   security-events: write
 
+# Cancel superseded runs of the same branch/PR so stale pipelines
+# do not queue up on the self-hosted runners.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Test & Quality
@@ -40,6 +46,7 @@ jobs:
       inputs.security_scan == 'all' ||
       inputs.security_scan == 'test'
     runs-on: [self-hosted, runner-1]
+    timeout-minutes: 15
 
     defaults:
       run:
@@ -49,6 +56,12 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
       - name: Check Node.js
         run: node --version
 
@@ -57,6 +70,9 @@ jobs:
 
       - name: Install Dependencies
         run: npm ci
+
+      - name: Unit Tests
+        run: npm test
 
       - name: NJSSCAN
         run: |
@@ -143,6 +159,7 @@ jobs:
 
     if: always()
     runs-on: [self-hosted, runner-1]
+    timeout-minutes: 10
 
     defaults:
       run:
@@ -175,3 +192,31 @@ jobs:
             echo "| Gitleaks | $GITLEAKS_RESULT |"
             echo "| Socket.dev | $SOCKET_RESULT |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Single gate: make this job ("CI Summary") the one required status
+      # check in branch protection. Skipped jobs (workflow_dispatch with a
+      # single selected check) are fine; failed or cancelled ones are not.
+      - name: Enforce CI Gate
+        if: always()
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          bad = {
+              name: info.get("result")
+              for name, info in needs.items()
+              if info.get("result") in ("failure", "cancelled")
+          }
+
+          if bad:
+              for name, result in sorted(bad.items()):
+                  print(f"::error::{name} finished with result: {result}")
+              sys.exit(1)
+
+          print("All required CI checks passed or were intentionally skipped.")
+          PY
