@@ -1,13 +1,26 @@
-
 name: CD Release
 
 on:
   push:
     branches:
       - main
+    # The manifest-update PR only touches helm/. Ignoring it here prevents the
+    # merge of that PR from triggering another build/release loop. The
+    # Deploy Verify workflow handles that merge instead.
+    paths-ignore:
+      - "helm/**"
 
+# contents: write is needed to push the update branch, pull-requests: write
+# to open the PR. Nothing in this workflow pushes directly to main.
 permissions:
   contents: write
+  pull-requests: write
+
+# Never cancel a release that is already running (half-pushed images, half
+# updated manifests). Newer runs wait their turn instead.
+concurrency:
+  group: cd-release-main
+  cancel-in-progress: false
 
 env:
   BACKEND_IMAGE: mkr05/hello-world-devops-backend
@@ -15,8 +28,9 @@ env:
 
 jobs:
   docker-release:
-    name: Docker Build, Scan, Push & Manifest Update
+    name: Docker Build, Scan, Push & Manifest PR
     runs-on: [self-hosted, runner-1]
+    timeout-minutes: 30
 
     defaults:
       run:
@@ -25,8 +39,6 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Docker Login
         env:
@@ -52,21 +64,30 @@ jobs:
         run: |
           docker build -t "$BACKEND_IMAGE:$IMAGE_TAG" .
 
-      - name: Scan Backend Image
-        run: |
-          docker scout cves "$BACKEND_IMAGE:$IMAGE_TAG"
-
-      - name: Push Backend Image
-        run: |
-          docker push "$BACKEND_IMAGE:$IMAGE_TAG"
-
       - name: Build Frontend Image
         run: |
           docker build -t "$FRONTEND_IMAGE:$IMAGE_TAG" ./frontend
 
+      # Blocking gates: docker scout exits 2 when it finds critical or high
+      # vulnerabilities, which fails the job before anything is pushed.
+      - name: Scan Backend Image
+        run: |
+          docker scout cves \
+            --only-severity critical,high \
+            --exit-code \
+            "$BACKEND_IMAGE:$IMAGE_TAG"
+
       - name: Scan Frontend Image
         run: |
-          docker scout cves "$FRONTEND_IMAGE:$IMAGE_TAG"
+          docker scout cves \
+            --only-severity critical,high \
+            --exit-code \
+            "$FRONTEND_IMAGE:$IMAGE_TAG"
+
+      # Push only after both images built and passed their scans.
+      - name: Push Backend Image
+        run: |
+          docker push "$BACKEND_IMAGE:$IMAGE_TAG"
 
       - name: Push Frontend Image
         run: |
@@ -104,19 +125,30 @@ jobs:
           print(f"Updated backend and frontend image tags to {tag}")
           PY
 
+      # Instead of pushing to main, open (or update) a pull request so the
+      # manifest change goes through branch protection and review.
+      #
+      # Note: PRs created with the default GITHUB_TOKEN do not trigger other
+      # workflows, so required status checks would never report on this PR.
+      # Add a fine-grained PAT (or GitHub App token) as the CD_PR_TOKEN secret
+      # so CI runs on it; without it the step falls back to GITHUB_TOKEN.
+      - name: Open Helm Update Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.CD_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          branch: cd/update-image-tags
+          base: main
+          add-paths: helm/hello-world-devops/values.yaml
+          commit-message: "Update image tags to ${{ env.IMAGE_TAG }}"
+          title: "Deploy ${{ env.IMAGE_TAG }}: update Helm image tags"
+          body: |
+            Automated release PR created by the CD Release workflow.
 
-      - name: Commit Helm Update
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            - Backend image: `${{ env.BACKEND_IMAGE }}:${{ env.IMAGE_TAG }}`
+            - Frontend image: `${{ env.FRONTEND_IMAGE }}:${{ env.IMAGE_TAG }}`
+            - Source commit: ${{ github.sha }}
 
-          git add helm/hello-world-devops/values.yaml
-
-          if git diff --cached --quiet; then
-            echo "No Helm changes to commit."
-            exit 0
-          fi
-
-          git commit -m "Update image tags to $IMAGE_TAG [skip ci]"
-          git push origin HEAD:main
+            Both images were built, scanned (no critical/high findings) and
+            pushed before this PR was opened. Merging it makes ArgoCD roll
+            the new tag out; the Deploy Verify workflow then smoke-tests it.
+          delete-branch: true
