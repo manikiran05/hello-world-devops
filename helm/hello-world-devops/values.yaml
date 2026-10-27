@@ -41,7 +41,7 @@ frontend:
   service:
     type: NodePort
     port: 80
-    targetPort: 80
+    targetPort: 8080
 
 postgres:
   replicaCount: 1
