@@ -93,7 +93,9 @@ jobs:
       inputs.security_scan == 'all' ||
       inputs.security_scan == 'sonarqube'
     uses: ./.github/workflows/sonarqube.yml
-    secrets: inherit
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
   codeql:
     name: CodeQL Security Scan
@@ -118,7 +120,8 @@ jobs:
       inputs.security_scan == 'all' ||
       inputs.security_scan == 'snyk'
     uses: ./.github/workflows/snyk.yml
-    secrets: inherit
+    secrets:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
   semgrep:
     name: Semgrep Security Scan
@@ -143,7 +146,6 @@ jobs:
       inputs.security_scan == 'all' ||
       inputs.security_scan == 'socket'
     uses: ./.github/workflows/socket.yml
-    secrets: inherit
 
   summary:
     name: CI Summary
@@ -195,7 +197,7 @@ jobs:
 
       # Single gate: make this job ("CI Summary") the one required status
       # check in branch protection. Skipped jobs (workflow_dispatch with a
-      # single selected check) are fine; failed or cancelled ones are not.
+      # single selected checks are fine; failed or cancelled ones are not.
       - name: Enforce CI Gate
         if: always()
         env:
