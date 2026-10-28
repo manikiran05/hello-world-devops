@@ -83,8 +83,6 @@ jobs:
               print(f"EXPECTED_{key}_IMAGE={repository.group(1)}:{tag.group(1)}")
           PY
 
-          echo "Expected backend: $EXPECTED_BACKEND_IMAGE"
-          echo "Expected frontend: $EXPECTED_FRONTEND_IMAGE"
 
       - name: Wait for Argo CD to Apply the Expected Images
         run: |
