@@ -4,14 +4,14 @@ on:
   push:
     branches:
       - main
-    # Prevent the Helm tag commit from triggering another release.
+    # Helm-only updates are verified by Deploy Verify, not rebuilt.
     paths-ignore:
       - "helm/**"
 
 permissions:
   contents: write
+  pull-requests: write
 
-# Never cancel an active release.
 concurrency:
   group: cd-release-main
   cancel-in-progress: false
@@ -22,17 +22,29 @@ env:
 
 jobs:
   docker-release:
-    name: Docker Build, Scan, Push & Update Helm Tags
+    name: Docker Build, Scan, Push & Helm PR
     runs-on: [self-hosted, runner-1]
     timeout-minutes: 30
-
     defaults:
       run:
         shell: bash
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set Up Consistent Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Verify Runner Toolchain
+        run: |
+          set -euo pipefail
+          docker --version
+          docker scout version
+          python3 --version
+          git --version
 
       - name: Docker Login
         env:
@@ -40,21 +52,21 @@ jobs:
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
         run: |
           set -euo pipefail
-
           if [[ -z "$DOCKER_USERNAME" || -z "$DOCKER_PASSWORD" ]]; then
             echo "::error::Docker Hub credentials are missing."
             exit 1
           fi
-
           echo "$DOCKER_PASSWORD" | docker login \
             --username "$DOCKER_USERNAME" \
             --password-stdin
 
       - name: Set Image Tag
+        id: image_tag
         run: |
           set -euo pipefail
           IMAGE_TAG="${GITHUB_SHA::7}"
           echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+          echo "tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
           echo "Using image tag: $IMAGE_TAG"
 
       - name: Build Backend Image
@@ -67,13 +79,12 @@ jobs:
           set -euo pipefail
           docker build --pull -t "$FRONTEND_IMAGE:$IMAGE_TAG" ./frontend
 
-      # Diagnostic only; the security scans below remain blocking.
       - name: Frontend Base Image Recommendations
         continue-on-error: true
-        run: |
-          docker scout recommendations "$FRONTEND_IMAGE:$IMAGE_TAG"
+        run: docker scout recommendations "$FRONTEND_IMAGE:$IMAGE_TAG"
 
-      # Both scans must pass before either image is pushed.
+      # Blocking security gates: fail on any HIGH or CRITICAL finding.
+      # No image is pushed unless both scans pass.
       - name: Scan Backend Image
         run: |
           set -euo pipefail
@@ -103,7 +114,6 @@ jobs:
       - name: Update Helm Image Tags
         run: |
           set -euo pipefail
-
           python3 - <<'PY'
           import os
           import re
@@ -118,17 +128,15 @@ jobs:
                   rf"(?ms)^({section}:\s*\n.*?)"
                   rf"(^[ \t]+tag:\s*)[^\r\n]*"
               )
-
               content, count = re.subn(
                   pattern,
                   lambda m: m.group(1) + m.group(2) + f'"{tag}"',
                   content,
                   count=1,
               )
-
               if count != 1:
                   raise SystemExit(
-                      f"Could not uniquely update {section} image tag "
+                      f"Could not uniquely update {section}.image.tag "
                       "in values.yaml"
                   )
 
@@ -136,23 +144,28 @@ jobs:
           print(f"Updated backend and frontend image tags to {tag}")
           PY
 
-      - name: Commit and Push Helm Changes to Main
-        run: |
-          set -euo pipefail
+      # Reuses one PR branch: later releases update the existing PR instead
+      # of opening a separate PR for every release.
+      - name: Open or Update Helm Image Tag PR
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
+        with:
+          token: ${{ secrets.CD_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          branch: cd/update-image-tags
+          base: main
+          add-paths: helm/hello-world-devops/values.yaml
+          commit-message: "chore: update Helm image tags to ${{ steps.image_tag.outputs.tag }}"
+          title: "Deploy ${{ steps.image_tag.outputs.tag }}: update Helm image tags"
+          body: |
+            Automated Helm image-tag update from the CD Release workflow.
 
-          git config user.name "github-actions[bot]"
-          git config user.email \
-            "41898282+github-actions[bot]@users.noreply.github.com"
+            - Backend image: ${{ env.BACKEND_IMAGE }}:${{ steps.image_tag.outputs.tag }}
+            - Frontend image: ${{ env.FRONTEND_IMAGE }}:${{ steps.image_tag.outputs.tag }}
+            - Source commit: ${{ github.sha }}
 
-          git add helm/hello-world-devops/values.yaml
-
-          if git diff --cached --quiet; then
-            echo "Helm image tags are already up to date."
-            exit 0
-          fi
-
-          git commit -m "chore: update Helm image tags to $IMAGE_TAG"
-          git push origin HEAD:main
+            Both images passed the blocking HIGH/CRITICAL Docker Scout scans
+            and were pushed to Docker Hub before this PR was opened.
+            Merging this PR allows Argo CD to sync the updated Helm values.
+          delete-branch: true
 
       - name: Logout from Docker Hub
         if: always()

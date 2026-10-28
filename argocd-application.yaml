@@ -8,7 +8,7 @@ spec:
   project: default
 
   source:
-    repoURL: https://github.com/manikiran7/hello-world-devops.git
+    repoURL: https://github.com/manikiran05/hello-world-devops.git
     targetRevision: main
     path: helm/hello-world-devops
 
