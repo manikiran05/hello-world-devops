@@ -1,11 +1,9 @@
 
 name: CI Pipeline
 
+# Run the full CI suite once a PR is opened or updated.
+# Use "Run workflow" for a manual check when needed.
 on:
-  push:
-    branches:
-      - "feature/**"
-
   pull_request:
     branches:
       - main
