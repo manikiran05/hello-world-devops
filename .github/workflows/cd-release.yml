@@ -48,8 +48,8 @@ jobs:
 
       - name: Docker Login
         env:
-          DOCKER_USERNAME: \${{ secrets.DOCKER_USERNAME }}
-          DOCKER_PASSWORD: \${{ secrets.DOCKER_PASSWORD }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
         run: |
           set -euo pipefail
           if [[ -z "$DOCKER_USERNAME" || -z "$DOCKER_PASSWORD" ]]; then
@@ -63,7 +63,7 @@ jobs:
       - name: Set Image Tag
         run: |
           set -euo pipefail
-          IMAGE_TAG="\${GITHUB_SHA::7}"
+          IMAGE_TAG="${GITHUB_SHA::7}"
           echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
           echo "Using image tag: $IMAGE_TAG"
 
@@ -147,18 +147,18 @@ jobs:
       - name: Open or Update Helm Image Tag PR
         uses: peter-evans/create-pull-request@v7
         with:
-          token: \${{ secrets.CD_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.CD_PR_TOKEN || secrets.GITHUB_TOKEN }}
           branch: cd/update-image-tags
           base: main
           add-paths: helm/hello-world-devops/values.yaml
-          commit-message: "chore: update Helm image tags to \${{ env.IMAGE_TAG }}"
-          title: "Deploy \${{ env.IMAGE_TAG }}: update Helm image tags"
+          commit-message: "chore: update Helm image tags to ${{ env.IMAGE_TAG }}"
+          title: "Deploy ${{ env.IMAGE_TAG }}: update Helm image tags"
           body: |
             Automated Helm image-tag update from the CD Release workflow.
 
-            - Backend image: \${{ env.BACKEND_IMAGE }}:\${{ env.IMAGE_TAG }}
-            - Frontend image: \${{ env.FRONTEND_IMAGE }}:\${{ env.IMAGE_TAG }}
-            - Source commit: \${{ github.sha }}
+            - Backend image: ${{ env.BACKEND_IMAGE }}:${{ env.IMAGE_TAG }}
+            - Frontend image: ${{ env.FRONTEND_IMAGE }}:${{ env.IMAGE_TAG }}
+            - Source commit: ${{ github.sha }}
 
             Both images passed the blocking HIGH/CRITICAL Docker Scout scans
             and were pushed to Docker Hub before this PR was opened.
