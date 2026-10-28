@@ -1,0 +1,181 @@
+name: Deploy Verify
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "helm/**"
+      - ".github/workflows/deploy-verify.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-verify-main
+  cancel-in-progress: false
+
+jobs:
+  deployment-smoke-test:
+    name: Wait for Argo CD and smoke-test deployment
+    runs-on: [self-hosted, runner-1]
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      NAMESPACE: hello-world-devops
+      FRONTEND_SERVICE: hello-world-devops-frontend
+      BACKEND_DEPLOYMENT: hello-world-devops-backend
+      FRONTEND_DEPLOYMENT: hello-world-devops-frontend
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set Up Consistent Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify Deployment Toolchain and Cluster Access
+        run: |
+          set -euo pipefail
+          python3 --version
+          kubectl version --client
+          kubectl config current-context
+          kubectl get namespace "$NAMESPACE"
+
+      - name: Read Expected Helm Images
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import re
+          from pathlib import Path
+
+          text = Path("helm/hello-world-devops/values.yaml").read_text()
+
+          for section in ("backend", "frontend"):
+              section_match = re.search(
+                  rf"(?ms)^{section}:\s*\n(.*?)(?=^[A-Za-z][\w-]*:\s*$|\Z)",
+                  text,
+              )
+              if not section_match:
+                  raise SystemExit(f"Missing Helm section: {section}")
+
+              block = section_match.group(1)
+              repository = re.search(
+                  r"(?m)^[ \t]+repository:\s*['\"]?([^'\"\s#]+)",
+                  block,
+              )
+              tag = re.search(
+                  r"(?m)^[ \t]+tag:\s*['\"]?([^'\"\s#]+)",
+                  block,
+              )
+              if not repository or not tag:
+                  raise SystemExit(
+                      f"Could not read image repository/tag for {section}"
+                  )
+
+              key = section.upper()
+              print(f"EXPECTED_{key}_IMAGE={repository.group(1)}:{tag.group(1)}")
+          PY
+
+          echo "Expected backend: $EXPECTED_BACKEND_IMAGE"
+          echo "Expected frontend: $EXPECTED_FRONTEND_IMAGE"
+
+      - name: Wait for Argo CD to Apply the Expected Images
+        run: |
+          set -euo pipefail
+
+          wait_for_image() {
+            local deployment="$1"
+            local expected_image="$2"
+            local actual_image=""
+
+            echo "Waiting for $deployment to use $expected_image"
+            for attempt in $(seq 1 120); do
+              actual_image="$(kubectl get deployment "$deployment" \
+                -n "$NAMESPACE" \
+                -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+
+              if [[ "$actual_image" == "$expected_image" ]]; then
+                echo "$deployment now references $actual_image"
+                return 0
+              fi
+
+              sleep 5
+            done
+
+            echo "::error::Timed out waiting for $deployment image. Expected $expected_image; found $actual_image"
+            return 1
+          }
+
+          wait_for_image "$BACKEND_DEPLOYMENT" "$EXPECTED_BACKEND_IMAGE"
+          wait_for_image "$FRONTEND_DEPLOYMENT" "$EXPECTED_FRONTEND_IMAGE"
+
+      - name: Verify Deployment Rollouts
+        run: |
+          set -euo pipefail
+          kubectl rollout status "deployment/$BACKEND_DEPLOYMENT" \
+            -n "$NAMESPACE" --timeout=240s
+          kubectl rollout status "deployment/$FRONTEND_DEPLOYMENT" \
+            -n "$NAMESPACE" --timeout=240s
+
+      - name: Smoke Test Frontend and Backend API
+        run: |
+          set -euo pipefail
+
+          LOG_FILE="$(mktemp)"
+          kubectl port-forward \
+            --address 127.0.0.1 \
+            "service/$FRONTEND_SERVICE" \
+            18080:80 \
+            -n "$NAMESPACE" >"$LOG_FILE" 2>&1 &
+          PORT_FORWARD_PID=$!
+
+          cleanup() {
+            kill "$PORT_FORWARD_PID" 2>/dev/null || true
+            wait "$PORT_FORWARD_PID" 2>/dev/null || true
+            rm -f "$LOG_FILE"
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error \
+              --output /dev/null http://127.0.0.1:18080/; then
+              ready=1
+              break
+            fi
+
+            if ! kill -0 "$PORT_FORWARD_PID" 2>/dev/null; then
+              cat "$LOG_FILE"
+              echo "::error::kubectl port-forward exited unexpectedly"
+              exit 1
+            fi
+            sleep 2
+          done
+
+          if [[ "$ready" -ne 1 ]]; then
+            cat "$LOG_FILE"
+            echo "::error::Frontend did not become reachable through port-forward"
+            exit 1
+          fi
+
+          curl --fail --silent --show-error \
+            --output /dev/null \
+            --write-out "Frontend HTTP status: %{http_code}\n" \
+            http://127.0.0.1:18080/
+
+          curl --fail --silent --show-error \
+            --output /dev/null \
+            --write-out "Backend health HTTP status: %{http_code}\n" \
+            http://127.0.0.1:18080/api/health
+
+          curl --fail --silent --show-error \
+            --output /dev/null \
+            --write-out "Backend readiness HTTP status: %{http_code}\n" \
+            http://127.0.0.1:18080/api/ready
