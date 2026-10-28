@@ -133,8 +133,8 @@ jobs:
 
           for section in ("backend", "frontend"):
               pattern = (
-                  rf"(?ms)^({section}:\\s*\\n.*?)"
-                  rf"(^[ \\t]+tag:\\s*)[^\\r\\n]*"
+                  rf"(?ms)^({section}:\s*\n.*?)"
+                  rf"(^[ \t]+tag:\s*)[^\r\n]*"
               )
               content, count = re.subn(
                   pattern,
@@ -261,8 +261,8 @@ jobs:
           fi
 
           curl --fail --silent --show-error --output /dev/null \
-            --write-out "Frontend HTTP status: %{http_code}\\n" http://127.0.0.1:18080/
+            --write-out "Frontend HTTP status: %{http_code}\n" http://127.0.0.1:18080/
           curl --fail --silent --show-error --output /dev/null \
-            --write-out "Backend health HTTP status: %{http_code}\\n" http://127.0.0.1:18080/api/health
+            --write-out "Backend health HTTP status: %{http_code}\n" http://127.0.0.1:18080/api/health
           curl --fail --silent --show-error --output /dev/null \
-            --write-out "Backend readiness HTTP status: %{http_code}\\n" http://127.0.0.1:18080/api/ready
+            --write-out "Backend readiness HTTP status: %{http_code}\n" http://127.0.0.1:18080/api/ready
