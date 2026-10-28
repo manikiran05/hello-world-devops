@@ -8,9 +8,6 @@ on:
     paths-ignore:
       - "helm/**"
 
-permissions:
-  contents: write
-  pull-requests: write
 
 concurrency:
   group: cd-release-main
@@ -22,7 +19,11 @@ env:
 
 jobs:
   docker-release:
-    name: Docker Build, Scan, Push & Helm PR
+    name: Build, Scan, Push & Update Helm
+    permissions:
+      contents: write
+    outputs:
+      image_tag: ${{ steps.image_tag.outputs.tag }}
     runs-on: [self-hosted, runner-1]
     timeout-minutes: 30
     defaults:
@@ -111,9 +112,16 @@ jobs:
           set -euo pipefail
           docker push "$FRONTEND_IMAGE:$IMAGE_TAG"
 
-      - name: Update Helm Image Tags
+      - name: Update Helm Tags on main
+        env:
+          IMAGE_TAG: ${{ steps.image_tag.outputs.tag }}
         run: |
           set -euo pipefail
+
+          # Start from the latest main so the release commit includes current Helm values.
+          git fetch origin main
+          git checkout -B deploy-helm-update origin/main
+
           python3 - <<'PY'
           import os
           import re
@@ -135,38 +143,126 @@ jobs:
                   count=1,
               )
               if count != 1:
-                  raise SystemExit(
-                      f"Could not uniquely update {section}.image.tag "
-                      "in values.yaml"
-                  )
+                  raise SystemExit(f"Could not update {section} image tag")
 
           path.write_text(content)
           print(f"Updated backend and frontend image tags to {tag}")
           PY
 
-      # Reuses one PR branch: later releases update the existing PR instead
-      # of opening a separate PR for every release.
-      - name: Open or Update Helm Image Tag PR
-        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
-        with:
-          token: ${{ secrets.CD_PR_TOKEN || secrets.GITHUB_TOKEN }}
-          branch: cd/update-image-tags
-          base: main
-          add-paths: helm/hello-world-devops/values.yaml
-          commit-message: "chore: update Helm image tags to ${{ steps.image_tag.outputs.tag }}"
-          title: "Deploy ${{ steps.image_tag.outputs.tag }}: update Helm image tags"
-          body: |
-            Automated Helm image-tag update from the CD Release workflow.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add helm/hello-world-devops/values.yaml
 
-            - Backend image: ${{ env.BACKEND_IMAGE }}:${{ steps.image_tag.outputs.tag }}
-            - Frontend image: ${{ env.FRONTEND_IMAGE }}:${{ steps.image_tag.outputs.tag }}
-            - Source commit: ${{ github.sha }}
-
-            Both images passed the blocking HIGH/CRITICAL Docker Scout scans
-            and were pushed to Docker Hub before this PR was opened.
-            Merging this PR allows Argo CD to sync the updated Helm values.
-          delete-branch: true
+          if git diff --cached --quiet; then
+            echo "Helm image tags already match this release."
+          else
+            git commit -m "chore: deploy images ${IMAGE_TAG}"
+            git push origin HEAD:main
+          fi
 
       - name: Logout from Docker Hub
         if: always()
         run: docker logout
+
+  deployment-smoke-test:
+    name: Wait for deployment and smoke-test
+    needs: docker-release
+    runs-on: [self-hosted, runner-1]
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      NAMESPACE: hello-world-devops
+      FRONTEND_SERVICE: hello-world-devops-frontend
+      BACKEND_DEPLOYMENT: hello-world-devops-backend
+      FRONTEND_DEPLOYMENT: hello-world-devops-frontend
+      EXPECTED_BACKEND_IMAGE: mkr05/hello-world-devops-backend:${{ needs.docker-release.outputs.image_tag }}
+      EXPECTED_FRONTEND_IMAGE: mkr05/hello-world-devops-frontend:${{ needs.docker-release.outputs.image_tag }}
+
+    steps:
+      - name: Check Kubernetes Access
+        run: |
+          set -euo pipefail
+          kubectl version --client
+          kubectl config current-context
+          kubectl get namespace "$NAMESPACE"
+
+      - name: Wait for Argo CD to Apply New Images
+        run: |
+          set -euo pipefail
+
+          wait_for_image() {
+            local deployment="$1"
+            local expected_image="$2"
+            local actual_image=""
+
+            echo "Waiting for $deployment to use $expected_image"
+            for attempt in $(seq 1 120); do
+              actual_image="$(kubectl get deployment "$deployment" \
+                -n "$NAMESPACE" \
+                -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+
+              if [[ "$actual_image" == "$expected_image" ]]; then
+                echo "$deployment now uses $actual_image"
+                return 0
+              fi
+              sleep 5
+            done
+
+            echo "::error::Timed out waiting for $deployment. Expected $expected_image; found $actual_image"
+            return 1
+          }
+
+          wait_for_image "$BACKEND_DEPLOYMENT" "$EXPECTED_BACKEND_IMAGE"
+          wait_for_image "$FRONTEND_DEPLOYMENT" "$EXPECTED_FRONTEND_IMAGE"
+
+      - name: Verify Kubernetes Rollouts
+        run: |
+          set -euo pipefail
+          kubectl rollout status "deployment/$BACKEND_DEPLOYMENT" -n "$NAMESPACE" --timeout=240s
+          kubectl rollout status "deployment/$FRONTEND_DEPLOYMENT" -n "$NAMESPACE" --timeout=240s
+
+      - name: Smoke Test Frontend and Backend APIs
+        run: |
+          set -euo pipefail
+
+          LOG_FILE="$(mktemp)"
+          kubectl port-forward --address 127.0.0.1 \
+            "service/$FRONTEND_SERVICE" 18080:80 \
+            -n "$NAMESPACE" >"$LOG_FILE" 2>&1 &
+          PORT_FORWARD_PID=$!
+
+          cleanup() {
+            kill "$PORT_FORWARD_PID" 2>/dev/null || true
+            wait "$PORT_FORWARD_PID" 2>/dev/null || true
+            rm -f "$LOG_FILE"
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --output /dev/null http://127.0.0.1:18080/; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$PORT_FORWARD_PID" 2>/dev/null; then
+              cat "$LOG_FILE"
+              echo "::error::kubectl port-forward exited unexpectedly"
+              exit 1
+            fi
+            sleep 2
+          done
+
+          if [[ "$ready" -ne 1 ]]; then
+            cat "$LOG_FILE"
+            echo "::error::Frontend did not become reachable"
+            exit 1
+          fi
+
+          curl --fail --silent --show-error --output /dev/null \
+            --write-out "Frontend HTTP status: %{http_code}\n" http://127.0.0.1:18080/
+          curl --fail --silent --show-error --output /dev/null \
+            --write-out "Backend health HTTP status: %{http_code}\n" http://127.0.0.1:18080/api/health
+          curl --fail --silent --show-error --output /dev/null \
+            --write-out "Backend readiness HTTP status: %{http_code}\n" http://127.0.0.1:18080/api/ready
